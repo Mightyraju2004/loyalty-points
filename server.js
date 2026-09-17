@@ -1,419 +1,318 @@
-const express = require("express");
-const sqlite3 = require("sqlite3").verbose();
-const cors = require("cors");
-const crypto = require("crypto");
-const path = require("path");
+const express = require('express');
+const sqlite3 = require('sqlite3').verbose();
+const path = require('path');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-app.use(cors());
+// Middleware
 app.use(express.json());
-app.use(express.static(path.join(__dirname, "public")));
+app.use(express.static(path.join(__dirname, 'public')));
 
-const db = new sqlite3.Database("./loyalty.db", (err) => {
-  if (err) {
-    console.error("Database error:", err.message);
-  } else {
-    console.log("Connected to SQLite database.");
-  }
+// Initialize SQLite Database
+const db = new sqlite3.Database('./database.db', (err) => {
+  if (err) console.error('Database connection error:', err.message);
+  else console.log('Connected to SQLite database.');
 });
 
-// ---------- DATABASE HELPERS ----------
-function run(sql, params = []) {
-  return new Promise((resolve, reject) => {
-    db.run(sql, params, function (err) {
-      if (err) reject(err);
-      else resolve({ id: this.lastID, changes: this.changes });
+// Create Database Tables & Schema Migrations
+db.serialize(() => {
+  db.run(`
+    CREATE TABLE IF NOT EXISTS members (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL,
+      phone TEXT UNIQUE NOT NULL,
+      email TEXT,
+      points INTEGER DEFAULT 0,
+      lifetime_points INTEGER DEFAULT 0,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    )
+  `);
+
+  db.all(`PRAGMA table_info(members)`, (err, columns) => {
+    if (err) return console.error('Migration read failed:', err.message);
+
+    const hasLifetimePoints = Array.isArray(columns) && columns.some((column) => column.name === 'lifetime_points');
+    if (!hasLifetimePoints) {
+      db.run(`ALTER TABLE members ADD COLUMN lifetime_points INTEGER DEFAULT 0`, (alterErr) => {
+        if (alterErr) console.error('Migration add column failed:', alterErr.message);
+        else {
+          db.run(`UPDATE members SET lifetime_points = points WHERE lifetime_points IS NULL OR lifetime_points = 0`);
+        }
+      });
+    } else {
+      db.run(`UPDATE members SET lifetime_points = points WHERE lifetime_points IS NULL OR lifetime_points = 0`);
+    }
+  });
+
+  // Ledger for tracking point expiration (90 days)
+  db.run(`
+    CREATE TABLE IF NOT EXISTS point_ledger (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      member_id INTEGER NOT NULL,
+      points_earned INTEGER NOT NULL,
+      points_remaining INTEGER NOT NULL,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    )
+  `);
+
+  // Outbox table for tier upgrade notifications
+  db.run(`
+    CREATE TABLE IF NOT EXISTS outbox (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      member_id INTEGER NOT NULL,
+      event_type TEXT NOT NULL,
+      payload TEXT NOT NULL,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    )
+  `);
+});
+
+function normalizePhone(phone) {
+  return String(phone || '').replace(/\D/g, '');
+}
+
+// Level 1 Twist: Tier Calculation with Platinum, Gold, Silver, and Bronze
+function getTierInfo(member) {
+  const lifetime = Number(member.lifetime_points ?? member.points ?? 0);
+
+  if (lifetime >= 5000) {
+    return { tier: 'Platinum', ratePerRupee: 0.3, displayMultiplier: '0.3 pts/₹' };
+  }
+  if (lifetime >= 500) {
+    return { tier: 'Gold', ratePerRupee: 0.02, displayMultiplier: '2x pts/₹100' };
+  }
+  if (lifetime >= 200) {
+    return { tier: 'Silver', ratePerRupee: 0.015, displayMultiplier: '1.5x pts/₹100' };
+  }
+
+  // Base tier for 0 to 199 points
+  return { tier: 'Bronze', ratePerRupee: 0.01, displayMultiplier: '1x pts/₹100' };
+}
+
+// Helper: Format member output for API responses
+function formatMember(member) {
+  const tierInfo = getTierInfo(member);
+  return {
+    ...member,
+    tier: tierInfo.tier,
+    multiplier: tierInfo.ratePerRupee,
+    displayMultiplier: tierInfo.displayMultiplier
+  };
+}
+
+// 1. Register New Member
+app.post('/api/members', (req, res) => {
+  const { name, phone, email } = req.body;
+
+  if (!name || !phone) {
+    return res.status(400).json({ error: 'Name and phone number are required.' });
+  }
+
+  const cleanPhone = normalizePhone(phone);
+  if (!cleanPhone) {
+    return res.status(400).json({ error: 'Phone number cannot be empty.' });
+  }
+
+  db.get(`SELECT id FROM members WHERE phone = ?`, [cleanPhone], (err, existingMember) => {
+    if (err) return res.status(500).json({ error: 'Database error.' });
+    if (existingMember) {
+      return res.status(400).json({ error: 'A member with this phone number already exists.' });
+    }
+
+    const query = `INSERT INTO members (name, phone, email, points, lifetime_points) VALUES (?, ?, ?, 0, 0)`;
+    db.run(query, [name.trim(), cleanPhone, email ? email.trim() : ''], function (err) {
+      if (err) return res.status(500).json({ error: 'Failed to register member.' });
+
+      db.get(`SELECT * FROM members WHERE id = ?`, [this.lastID], (err, row) => {
+        if (err) return res.status(500).json({ error: 'Database error.' });
+        res.status(201).json(formatMember(row));
+      });
     });
   });
-}
+});
 
-function get(sql, params = []) {
-  return new Promise((resolve, reject) => {
-    db.get(sql, params, (err, row) => {
-      if (err) reject(err);
-      else resolve(row);
-    });
+// 2. Phone Lookup
+app.get('/api/members/lookup', (req, res) => {
+  const { phone } = req.query;
+  if (!phone) return res.status(400).json({ error: 'Phone number parameter is required.' });
+
+  const normalized = normalizePhone(phone);
+  db.get(`SELECT * FROM members WHERE phone = ?`, [normalized], (err, row) => {
+    if (err) return res.status(500).json({ error: 'Database error.' });
+    if (!row) return res.status(404).json({ error: 'Member not found.' });
+
+    res.json(formatMember(row));
   });
-}
-
-function all(sql, params = []) {
-  return new Promise((resolve, reject) => {
-    db.all(sql, params, (err, rows) => {
-      if (err) reject(err);
-      else resolve(rows);
-    });
-  });
-}
-
-// ---------- PASSWORD HELPERS ----------
-function hashPassword(password) {
-  return new Promise((resolve, reject) => {
-    const salt = crypto.randomBytes(16).toString("hex");
-    crypto.scrypt(password, salt, 64, (err, derivedKey) => {
-      if (err) return reject(err);
-      resolve(`${salt}:${derivedKey.toString("hex")}`);
-    });
-  });
-}
-
-function verifyPassword(password, storedPassword) {
-  return new Promise((resolve, reject) => {
-    const [salt, key] = storedPassword.split(":");
-    crypto.scrypt(password, salt, 64, (err, derivedKey) => {
-      if (err) return reject(err);
-      resolve(
-        crypto.timingSafeEqual(
-          Buffer.from(key, "hex"),
-          derivedKey
-        )
-      );
-    });
-  });
-}
-
-const sessions = new Map();
-function createToken() {
-  return crypto.randomBytes(32).toString("hex");
-}
-
-// ---------- LOYALTY RULES ----------
-function getTier(points) {
-  if (points >= 1000) return "Platinum";
-  if (points >= 500) return "Gold";
-  return "Silver";
-}
-
-function getEarnRate(tier) {
-  if (tier === "Platinum") return 3;
-  if (tier === "Gold") return 2;
-  return 1;
-}
-
-async function getMemberBalance(memberId) {
-  const result = await get(
-    `SELECT COALESCE(SUM(CASE WHEN type = 'EARN' THEN points ELSE 0 END), 0) - COALESCE(SUM(CASE WHEN type = 'REDEEM' THEN points ELSE 0 END), 0) AS balance FROM transactions WHERE member_id = ?`,
-    [memberId]
-  );
-  return result ? result.balance : 0;
-}
-
-async function getMemberWithBalance(memberId) {
-  const member = await get(`SELECT * FROM members WHERE id = ?`, [memberId]);
-  if (!member) return null;
-  const balance = await getMemberBalance(memberId);
-  return { ...member, balance, tier: getTier(balance), earnRate: getEarnRate(getTier(balance)) };
-}
-
-// ---------- INITIALIZE DATABASE ----------
-async function initializeDatabase() {
-  try {
-    await run(
-      `CREATE TABLE IF NOT EXISTS users (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        name TEXT NOT NULL,
-        email TEXT UNIQUE NOT NULL,
-        password TEXT NOT NULL,
-        created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-      )`
-    );
-    await run(
-      `CREATE TABLE IF NOT EXISTS members (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        name TEXT NOT NULL,
-        phone TEXT UNIQUE NOT NULL,
-        email TEXT,
-        created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-      )`
-    );
-    await run(
-      `CREATE TABLE IF NOT EXISTS transactions (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        member_id INTEGER NOT NULL,
-        type TEXT NOT NULL CHECK(type IN ('EARN', 'REDEEM')),
-        points INTEGER NOT NULL CHECK(points > 0),
-        description TEXT,
-        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-        FOREIGN KEY (member_id) REFERENCES members(id)
-      )`
-    );
-    await run(
-      `CREATE TABLE IF NOT EXISTS rewards (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        name TEXT NOT NULL,
-        points_required INTEGER NOT NULL,
-        description TEXT
-      )`
-    );
-
-    const rewardCount = await get(`SELECT COUNT(*) AS count FROM rewards`);
-    if (rewardCount.count === 0) {
-      await run(
-        `INSERT INTO rewards (name, points_required, description) VALUES (?, ?, ?)`,
-        ["Free Coffee", 100, "Redeem one regular coffee"]
-      );
-      await run(
-        `INSERT INTO rewards (name, points_required, description) VALUES (?, ?, ?)`,
-        ["Free Sandwich", 250, "Redeem one sandwich"]
-      );
-      await run(
-        `INSERT INTO rewards (name, points_required, description) VALUES (?, ?, ?)`,
-        ["Free Cake", 400, "Redeem one slice of cake"]
-      );
-    }
-    console.log("Database initialized successfully.");
-  } catch (error) {
-    console.error("Database initialization failed:", error);
-  }
-}
-
-// ---------- AUTH ----------
-app.post("/api/register", async (req, res) => {
-  try {
-    const { name, email, password } = req.body;
-    if (!name || !email || !password) {
-      return res.status(400).json({ error: "Name, email and password are required." });
-    }
-    if (password.length < 6) {
-      return res.status(400).json({ error: "Password must be at least 6 characters." });
-    }
-    const existingUser = await get(`SELECT id FROM users WHERE email = ?`, [email]);
-    if (existingUser) {
-      return res.status(409).json({ error: "Email is already registered." });
-    }
-    const hashedPassword = await hashPassword(password);
-    const result = await run(
-      `INSERT INTO users (name, email, password) VALUES (?, ?, ?)`,
-      [name, email, hashedPassword]
-    );
-    res.status(201).json({ message: "Registration successful.", userId: result.id });
-  } catch (error) {
-    console.error(error);
-    res.status(500).json({ error: "Registration failed." });
-  }
 });
 
-app.post("/api/login", async (req, res) => {
-  try {
-    const { email, password } = req.body;
-    if (!email || !password) {
-      return res.status(400).json({ error: "Email and password are required." });
-    }
-    const user = await get(`SELECT * FROM users WHERE email = ?`, [email]);
-    if (!user) {
-      return res.status(401).json({ error: "Invalid email or password." });
-    }
-    const validPassword = await verifyPassword(password, user.password);
-    if (!validPassword) {
-      return res.status(401).json({ error: "Invalid email or password." });
-    }
-    const token = createToken();
-    sessions.set(token, user.id);
-    res.json({ message: "Login successful.", token, user: { id: user.id, name: user.name, email: user.email } });
-  } catch (error) {
-    console.error(error);
-    res.status(500).json({ error: "Login failed." });
+// 3. Record Purchase & Add Points (Level 1 + Level 3 Notifications)
+app.post('/api/transactions/earn', (req, res) => {
+  const { phone, billAmount } = req.body;
+  const amount = parseFloat(billAmount);
+
+  if (isNaN(amount) || amount <= 0) {
+    return res.status(400).json({ error: 'Invalid bill amount.' });
   }
-});
 
-// ---------- MEMBERS ----------
-app.post("/api/members", async (req, res) => {
-  try {
-    const { name, phone, email } = req.body;
-    if (!name || !phone) {
-      return res.status(400).json({ error: "Name and phone are required." });
-    }
-    const result = await run(
-      `INSERT INTO members (name, phone, email) VALUES (?, ?, ?)`,
-      [name, phone, email || null]
-    );
-    const member = await getMemberWithBalance(result.id);
-    res.status(201).json(member);
-  } catch (error) {
-    if (error.message.includes("UNIQUE")) {
-      return res.status(409).json({ error: "A member with this phone number already exists." });
-    }
-    console.error(error);
-    res.status(500).json({ error: "Could not create member." });
-  }
-});
+  const searchPhone = normalizePhone(phone);
 
-app.get("/api/members", async (req, res) => {
-  try {
-    const search = req.query.search || "";
-    const page = Math.max(parseInt(req.query.page) || 1, 1);
-    const limit = Math.min(Math.max(parseInt(req.query.limit) || 10, 1), 50);
+  db.get(`SELECT * FROM members WHERE phone = ?`, [searchPhone], (err, member) => {
+    if (err) return res.status(500).json({ error: 'Database error.' });
+    if (!member) return res.status(404).json({ error: 'Member not found.' });
 
-    const allowedSorts = { name: "m.name", phone: "m.phone", created_at: "m.created_at" };
-    const sort = allowedSorts[req.query.sort] || "m.created_at";
-    const order = String(req.query.order).toLowerCase() === "asc" ? "ASC" : "DESC";
-    const offset = (page - 1) * limit;
+    const currentTierInfo = getTierInfo(member);
+    const oldTier = currentTierInfo.tier;
 
-    const searchValue = `%${search}%`;
+    const earnedPoints = Math.floor(amount * currentTierInfo.ratePerRupee);
+    const newPoints = member.points + earnedPoints;
+    const newLifetime = Number(member.lifetime_points || 0) + earnedPoints;
 
-    const countResult = await get(
-      `SELECT COUNT(*) AS total FROM members WHERE name LIKE ? OR phone LIKE ?`,
-      [searchValue, searchValue]
-    );
+    const updatedMember = { ...member, points: newPoints, lifetime_points: newLifetime };
+    const newTier = getTierInfo(updatedMember).tier;
 
-    const members = await all(
-      `SELECT m.*, COALESCE(SUM(CASE WHEN t.type = 'EARN' THEN t.points WHEN t.type = 'REDEEM' THEN -t.points ELSE 0 END), 0) AS balance
-       FROM members m
-       LEFT JOIN transactions t ON m.id = t.member_id
-       WHERE m.name LIKE ? OR m.phone LIKE ?
-       GROUP BY m.id
-       ORDER BY ${sort} ${order}
-       LIMIT ? OFFSET ?`,
-      [searchValue, searchValue, limit, offset]
-    );
+    // Update database
+    db.run(`UPDATE members SET points = ?, lifetime_points = ? WHERE id = ?`, [newPoints, newLifetime, member.id], function (err) {
+      if (err) return res.status(500).json({ error: 'Failed to update points.' });
 
-    const formattedMembers = members.map((member) => ({
-      ...member,
-      tier: getTier(member.balance),
-      earnRate: getEarnRate(getTier(member.balance))
-    }));
+      // Add to expiration ledger
+      db.run(`INSERT INTO point_ledger (member_id, points_earned, points_remaining, created_at) VALUES (?, ?, ?, CURRENT_TIMESTAMP)`, [member.id, earnedPoints, earnedPoints]);
 
-    res.json({
-      data: formattedMembers,
-      pagination: { page, limit, total: countResult.total, totalPages: Math.ceil(countResult.total / limit) }
-    });
-  } catch (error) {
-    console.error(error);
-    res.status(500).json({ error: "Could not fetch members." });
-  }
-});
-
-app.get("/api/members/:id", async (req, res) => {
-  try {
-    const member = await getMemberWithBalance(req.params.id);
-    if (!member) {
-      return res.status(404).json({ error: "Member not found." });
-    }
-    res.json(member);
-  } catch (error) {
-    console.error(error);
-    res.status(500).json({ error: "Could not fetch member." });
-  }
-});
-
-app.get("/api/members/:id/balance", async (req, res) => {
-  try {
-    const member = await getMemberWithBalance(req.params.id);
-    if (!member) {
-      return res.status(404).json({ error: "Member not found." });
-    }
-    res.json({ memberId: member.id, balance: member.balance, tier: member.tier, earnRate: member.earnRate });
-  } catch (error) {
-    console.error(error);
-    res.status(500).json({ error: "Could not fetch balance." });
-  }
-});
-
-// ---------- EARN POINTS ----------
-app.post("/api/members/:id/earn", async (req, res) => {
-  try {
-    const member = await getMemberWithBalance(req.params.id);
-    if (!member) {
-      return res.status(404).json({ error: "Member not found." });
-    }
-
-    const { amount, points, description } = req.body;
-    let earnedPoints = Number(points);
-
-    if (amount !== undefined) {
-      const purchaseAmount = Number(amount);
-      if (!Number.isFinite(purchaseAmount) || purchaseAmount <= 0) {
-        return res.status(400).json({ error: "Purchase amount must be greater than zero." });
+      // Level 3: Outbox Trigger on Tier Upgrade
+      if (oldTier !== newTier) {
+        const payload = JSON.stringify({ member_id: member.id, old_tier: oldTier, new_tier: newTier });
+        db.run(`INSERT INTO outbox (member_id, event_type, payload) VALUES (?, 'TIER_UPGRADE', ?)`, [member.id, payload]);
       }
-      earnedPoints = Math.floor((purchaseAmount / 100) * member.earnRate);
-    }
 
-    if (!Number.isInteger(earnedPoints) || earnedPoints <= 0) {
-      return res.status(400).json({ error: "Points must be a positive whole number." });
-    }
-
-    await run(
-      `INSERT INTO transactions (member_id, type, points, description) VALUES (?, 'EARN', ?, ?)`,
-      [member.id, earnedPoints, description || `Points earned at ${member.tier} tier`]
-    );
-
-    const updatedMember = await getMemberWithBalance(member.id);
-    res.status(201).json({ message: "Points earned successfully.", transactionPoints: earnedPoints, member: updatedMember });
-  } catch (error) {
-    console.error(error);
-    res.status(500).json({ error: "Could not earn points." });
-  }
-});
-
-// ---------- REWARDS ----------
-app.get("/api/rewards", async (req, res) => {
-  try {
-    const rewards = await all(`SELECT * FROM rewards ORDER BY points_required ASC`);
-    res.json(rewards);
-  } catch (error) {
-    console.error(error);
-    res.status(500).json({ error: "Could not fetch rewards." });
-  }
-});
-
-app.post("/api/members/:id/redeem", async (req, res) => {
-  try {
-    const member = await getMemberWithBalance(req.params.id);
-    if (!member) {
-      return res.status(404).json({ error: "Member not found." });
-    }
-
-    const { rewardId } = req.body;
-    if (!rewardId) {
-      return res.status(400).json({ error: "Reward ID is required." });
-    }
-
-    const reward = await get(`SELECT * FROM rewards WHERE id = ?`, [rewardId]);
-    if (!reward) {
-      return res.status(404).json({ error: "Reward not found." });
-    }
-
-    if (member.balance < reward.points_required) {
-      return res.status(400).json({ error: `Not enough points. You have ${member.balance} points but need ${reward.points_required}.` });
-    }
-
-    await run(
-      `INSERT INTO transactions (member_id, type, points, description) VALUES (?, 'REDEEM', ?, ?)`,
-      [member.id, reward.points_required, `Redeemed: ${reward.name}`]
-    );
-
-    const updatedMember = await getMemberWithBalance(member.id);
-    res.status(201).json({ message: "Reward redeemed successfully.", reward, member: updatedMember });
-  } catch (error) {
-    console.error(error);
-    res.status(500).json({ error: "Could not redeem reward." });
-  }
-});
-
-// ---------- TRANSACTION HISTORY ----------
-app.get("/api/members/:id/transactions", async (req, res) => {
-  try {
-    const member = await get(`SELECT id FROM members WHERE id = ?`, [req.params.id]);
-    if (!member) {
-      return res.status(404).json({ error: "Member not found." });
-    }
-
-    const transactions = await all(
-      `SELECT * FROM transactions WHERE member_id = ? ORDER BY created_at DESC, id DESC`,
-      [req.params.id]
-    );
-    res.json(transactions);
-  } catch (error) {
-    console.error(error);
-    res.status(500).json({ error: "Could not fetch transactions." });
-  }
-});
-
-// ---------- START SERVER ----------
-initializeDatabase().then(() => {
-  app.listen(PORT, () => {
-    console.log(`Server running on port ${PORT}`);
-    console.log(`http://localhost:${PORT}`);
+      res.json({
+        message: `Added ${earnedPoints} points successfully!`,
+        earnedPoints,
+        member: formatMember(updatedMember)
+      });
+    });
   });
+});
+
+// 4. Redeem Reward
+app.post('/api/transactions/redeem', (req, res) => {
+  const { phone, cost } = req.body;
+  const pointsToDeduct = parseInt(cost, 10);
+
+  if (isNaN(pointsToDeduct) || pointsToDeduct <= 0) {
+    return res.status(400).json({ error: 'Invalid reward point cost.' });
+  }
+
+  const searchPhone = normalizePhone(phone);
+
+  db.get(`SELECT * FROM members WHERE phone = ?`, [searchPhone], (err, member) => {
+    if (err) return res.status(500).json({ error: 'Database error.' });
+    if (!member) return res.status(404).json({ error: 'Member not found.' });
+
+    if (member.points < pointsToDeduct) {
+      return res.status(400).json({
+        error: `Insufficient points balance. Required: ${pointsToDeduct} pts, Available: ${member.points} pts.`
+      });
+    }
+
+    const newPoints = member.points - pointsToDeduct;
+
+    db.run(`UPDATE members SET points = ? WHERE id = ?`, [newPoints, member.id], function (err) {
+      if (err) return res.status(500).json({ error: 'Failed to redeem reward.' });
+
+      res.json({
+        message: 'Reward redeemed successfully!',
+        redeemedPoints: pointsToDeduct,
+        member: formatMember({ ...member, points: newPoints })
+      });
+    });
+  });
+});
+
+// 5. Level 2: Clock API for 90-Day Expiration (Synchronized safely)
+app.post('/clock', (req, res) => {
+  const { current_time } = req.body;
+  const now = current_time ? new Date(current_time) : new Date();
+  const ninetyDaysAgo = new Date(now.getTime() - (90 * 24 * 60 * 60 * 1000));
+
+  db.all(`SELECT * FROM point_ledger WHERE points_remaining > 0 ORDER BY created_at ASC`, [], (err, rows) => {
+    if (err) return res.status(500).json({ error: 'Database error.' });
+
+    const expiredRows = rows.filter((row) => new Date(row.created_at) <= ninetyDaysAgo);
+
+    if (expiredRows.length === 0) {
+      return res.json({ message: 'Clock processed. No stale points expired.', expiredPoints: 0, affectedMembers: 0 });
+    }
+
+    let completed = 0;
+    let expiredTotal = 0;
+
+    expiredRows.forEach((row) => {
+      expiredTotal += Number(row.points_remaining || 0);
+
+      db.get(`SELECT points FROM members WHERE id = ?`, [row.member_id], (err, memberRow) => {
+        if (err) return;
+
+        const currentPoints = Number(memberRow?.points || 0);
+        const reducedPoints = Math.max(0, currentPoints - Number(row.points_remaining || 0));
+
+        db.run(`UPDATE members SET points = ? WHERE id = ?`, [reducedPoints, row.member_id], () => {
+          db.run(`UPDATE point_ledger SET points_remaining = 0 WHERE id = ?`, [row.id], () => {
+            completed += 1;
+            if (completed === expiredRows.length) {
+              res.json({
+                message: 'Clock processed and stale points expired successfully.',
+                expiredPoints: expiredTotal,
+                affectedMembers: completed
+              });
+            }
+          });
+        });
+      });
+    });
+  });
+});
+
+// 6. Level 3: Outbox Endpoint
+app.get('/outbox', (req, res) => {
+  db.all(`SELECT * FROM outbox ORDER BY id ASC`, [], (err, rows) => {
+    if (err) return res.status(500).json({ error: 'Database error.' });
+    res.json(rows);
+  });
+});
+
+// 7. Member Directory
+app.get('/api/members', (req, res) => {
+  const searchTerm = String(req.query.search || '').trim();
+  const search = searchTerm ? `%${searchTerm}%` : '%';
+  const page = parseInt(req.query.page, 10) || 1;
+  const limit = parseInt(req.query.limit, 10) || 10;
+  const offset = (page - 1) * limit;
+
+  const countQuery = `SELECT COUNT(*) AS total FROM members WHERE name LIKE ? OR phone LIKE ?`;
+  const dataQuery = `
+    SELECT * FROM members 
+    WHERE name LIKE ? OR phone LIKE ? 
+    ORDER BY id DESC 
+    LIMIT ? OFFSET ?
+  `;
+
+  db.get(countQuery, [search, search], (err, countResult) => {
+    if (err) return res.status(500).json({ error: 'Database error.' });
+
+    db.all(dataQuery, [search, search, limit, offset], (err, rows) => {
+      if (err) return res.status(500).json({ error: 'Database error.' });
+
+      res.json({
+        members: rows.map(formatMember),
+        total: countResult.total,
+        page,
+        totalPages: Math.ceil(countResult.total / limit) || 1
+      });
+    });
+  });
+});
+
+// Start Server
+app.listen(PORT, () => {
+  console.log(`Server running on http://localhost:${PORT}`);
 });

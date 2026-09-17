@@ -54,14 +54,14 @@
           <p><strong>Loyalty Tier:</strong> <span id="activeTier" class="badge"></span></p>
         </div>
 
-        <hr style="margin: 1rem 0; border: none; border-top: 1px solid var(--border-color);">
+        <hr style="margin: 1rem 0; border: none; border-top: 1px solid var(--border-color, #e2e8f0);">
 
         <!-- EARN POINTS -->
         <div class="form-group">
           <label>Record Purchase Bill Amount (₹)</label>
           <div style="display: flex; gap: 0.5rem;">
             <input type="number" id="purchaseAmount" placeholder="e.g. 350">
-            <button type="button" onclick="processEarn()" style="width: auto; background: #16a34a;">Add Points</button>
+            <button type="button" onclick="processEarn()" style="width: auto; background: #16a34a; color: white;">Add Points</button>
           </div>
         </div>
 
@@ -69,17 +69,17 @@
         <div class="form-group">
           <label>Redeem Free Item</label>
           <select id="rewardSelect">
-            <option value="1">Free Coffee (100 pts)</option>
-            <option value="2">Free Sandwich (250 pts)</option>
-            <option value="3">Free Cake (400 pts)</option>
+            <option value="100">Free Coffee (100 pts)</option>
+            <option value="250">Free Sandwich (250 pts)</option>
+            <option value="400">Free Cake (400 pts)</option>
           </select>
-          <button type="button" onclick="processRedeem()" class="danger">Redeem Reward</button>
+          <button type="button" onclick="processRedeem()" style="background: #dc2626; color: white;">Redeem Reward</button>
         </div>
       </div>
     </div>
 
     <!-- 3. MEMBER DIRECTORY TABLE -->
-    <div class="card">
+    <div class="card" style="margin-top: 1.5rem;">
       <h3>Member Directory & Live Balances</h3>
       <div style="display: flex; gap: 1rem; margin-bottom: 1rem;">
         <input type="text" id="searchInput" placeholder="Search by name or phone number..." oninput="loadMembers(1)">
@@ -90,9 +90,9 @@
         </select>
       </div>
 
-      <table>
+      <table style="width: 100%; border-collapse: collapse;">
         <thead>
-          <tr>
+          <tr style="text-align: left; border-bottom: 1px solid #e2e8f0;">
             <th>ID</th>
             <th>Name</th>
             <th>Phone</th>
@@ -104,17 +104,16 @@
         <tbody id="memberTableBody"></tbody>
       </table>
 
-      <div class="pagination">
-        <button type="button" onclick="if(currentPage > 1) loadMembers(currentPage - 1)" class="secondary" style="width: auto;">&larr; Previous</button>
+      <div class="pagination" style="display: flex; justify-content: space-between; align-items: center; margin-top: 1rem;">
+        <button type="button" onclick="if(currentPage > 1) loadMembers(currentPage - 1)" style="width: auto;">&larr; Previous</button>
         <span id="pageInfo">Page 1</span>
-        <button type="button" onclick="loadMembers(currentPage + 1)" class="secondary" style="width: auto;">Next &rarr;</button>
+        <button type="button" onclick="loadMembers(currentPage + 1)" style="width: auto;">Next &rarr;</button>
       </div>
     </div>
   </div>
 
   <script src="app.js"></script>
   <script>
-    checkAuth();
     loadMembers(1);
   </script>
 </body>

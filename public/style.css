@@ -43,7 +43,6 @@ button.danger:hover { background: #b91c1c; }
 .badge { padding: 0.2rem 0.6rem; border-radius: 4px; font-size: 0.8rem; font-weight: 700; display: inline-block; }
 .Silver { background: var(--silver-bg); color: var(--silver-text); }
 .Gold { background: var(--gold-bg); color: var(--gold-text); }
-.Platinum { background: var(--plat-bg); color: var(--plat-text); }
 
 table { width: 100%; border-collapse: collapse; margin-top: 1rem; background: var(--card-bg); border-radius: 8px; overflow: hidden; border: 1px solid var(--border-color); }
 th, td { padding: 0.75rem 1rem; text-align: left; border-bottom: 1px solid var(--border-color); }
