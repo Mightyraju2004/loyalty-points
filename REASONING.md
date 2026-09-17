@@ -1,89 +1,125 @@
-# Reasoning and solution approach
 
-## Problem interpretation
+# Reasoning and Solution Approach (`REASONING.md`)
 
-The assignment is a loyalty counter for a café chain. A staff member needs to:
-- register a member by phone number
-- look up the member quickly
-- apply points for purchase value
-- redeem free rewards only when enough points exist
-- keep the live tier and balance accurate at all times
+## Problem Interpretation
 
-There are also twists:
-- a Platinum tier is introduced using lifetime points
-- points expire after 90 days
-- tier-upgrade notifications are queued in an outbox
+The assignment requires implementing a robust Café Loyalty Program backend and POS dashboard. Café staff require a reliable system to:
+- Onboard new members using unique phone numbers.
+- Look up existing members instantly via search queries.
+- Award points dynamically calculated from transaction bill values and active status tiers.
+- Redeem reward vouchers with strict, server-enforced balance validation.
+- Maintain transparent, real-time balance calculations and tier badges across all UI elements.
 
-## Architecture decisions
+In addition to core features, the system integrates advanced twist logic:
+- A four-tier progression system (**Bronze**, **Silver**, **Gold**, and **Platinum**) driven by cumulative lifetime points.
+- A 90-day point expiration ledger engine simulated via time-shift requests (`POST /clock`).
+- An asynchronous event outbox (`/outbox`) to queue tier-upgrade and expiration notification events.
 
-I used a lightweight full-stack pattern with Express and SQLite because it fits the scope of a real-world counter without extra infrastructure complexity. The database stores member state and events, and the API reads from that state every time instead of depending on stale frontend values.
+---
 
-This ensures that the balance always reflects the current business rules rather than a cached number on the client.
+## Architectural Decisions
 
-## Tier logic
+A single-instance **Node.js + Express.js** server paired with an embedded **SQLite3** (`database.db`) persistence layer was selected. This architecture provides several key advantages:
 
-The app uses lifetime points for tier checks. The rules are:
-- Silver: default tier at low lifetime point totals
-- Gold: once lifetime points reach 500
-- Platinum: once lifetime points reach 5000
+1. **Lightweight & High-Performance:** Eliminates external service dependencies, enabling instant local startup and zero-configuration testing.
+2. **Server-Authoritative State:** All tier evaluations, balance calculations, and transaction validations are processed server-side. The frontend acts purely as a presentation layer, preventing client-side cache manipulation or stale display bugs.
+3. **Transactional Audit Trails:** SQLite's file-backed ACID compliance ensures point transactions and ledger adjustments survive server restarts and process kills.
 
-The point award rate follows the same tier logic:
-- Silver: 1 point per ₹100
-- Gold: 2 points per ₹100
-- Platinum: 0.3 points per ₹
+---
 
-This means tier and multiplier are derived from the same data source, which reduces mismatch risk.
+## Tier Logic & Multiplier Calibration
 
-## Data model
+To prevent tier calculation drift, a single, centralized evaluation function (`getTierInfo`) governs all status calculations across API endpoints and directory formatters.
 
-The main idea is to keep point movements explainable and auditable.
+Tier assignments and earning multipliers strictly adhere to the following business rules:
 
-- members stores the current balance and lifetime points
-- point_ledger records points earned and the remaining valid points after an expiration event
-- outbox stores notification records when a member crosses a tier threshold
+| Tier Level | Lifetime Points Bracket | Multiplier Rate | UI Multiplier Display Badge |
+| :--- | :--- | :--- | :--- |
+| **Bronze** | `0` – `199` lifetime pts | `0.01` | `1x pts/₹100` |
+| **Silver** | `200` – `499` lifetime pts | `0.015` | `1.5x pts/₹100` |
+| **Gold** | `500` – `4,999` lifetime pts | `0.02` | `2x pts/₹100` |
+| **Platinum** | `5,000+` lifetime pts | `0.3` | `0.3 pts/₹` |
 
-This is important because the assignment emphasises exact balance correctness under twist conditions.
+### Key Logic Implementation (`server.js`):
+javascript
+function getTierInfo(member) {
+  // Safe numeric coercion handling nullish DB fields
+  const lifetime = Number(member.lifetime_points ?? member.points ?? 0);
 
-## API design
+  if (lifetime >= 5000) {
+    return { tier: 'Platinum', ratePerRupee: 0.3, displayMultiplier: '0.3 pts/₹' };
+  }
+  if (lifetime >= 500) {
+    return { tier: 'Gold', ratePerRupee: 0.02, displayMultiplier: '2x pts/₹100' };
+  }
+  if (lifetime >= 200) {
+    return { tier: 'Silver', ratePerRupee: 0.015, displayMultiplier: '1.5x pts/₹100' };
+  }
 
-I designed APIs around real staff operations rather than generic CRUD. The key operations are:
-- register member
-- lookup by phone
-- earn points for purchase
-- redeem points for a reward
-- trigger expiry clock
-- view outbox notifications
+  return { tier: 'Bronze', ratePerRupee: 0.01, displayMultiplier: '1x pts/₹100' };
+}
+## Data Model & Schema Design
 
-This keeps the UI thin and the backend authoritative.
+The relational database structure separates current spendable state from historical audit trails:
 
-## UI design
+* **`members` Table:**
+  Primary identity store containing `id`, `name`, `phone` (unique key), `email`, spendable `points`, and cumulative `lifetime_points`.
+  `lifetime_points` serves as an append-only counter that never decreases upon redemption, guaranteeing tier persistence.
 
-The front-end includes:
-- landing page describing purpose and audience
-- staff login and registration
-- dashboard for member actions
-- member directory with search and pagination
-- active member card showing balance and tier
+* **`point_ledger` Table:**
+  Tracks individual point credit transactions (`points_earned`, `points_remaining`, `created_at`).
+  Supports 90-day First-In-First-Out (FIFO) expiration scheduling evaluated during `POST /clock` triggers.
 
-The interface is intentionally simple so a café staff member can perform actions quickly during a busy shift.
+* **`outbox` Table:**
+  Event outbox pattern store (`member_id`, `event_type`, `payload`, `created_at`).
+  Decouples notification queueing (e.g., `TIER_UPGRADE`, `POINTS_EXPIRED`) from HTTP request execution.
 
-## Testing and fixes
+---
 
-I tested the critical cases by running the server and hitting the endpoints directly:
-- duplicate phone registration is rejected
-- member lookup succeeds for the exact stored phone number
-- purchase earning updates points and tier correctly
-- reward redemption validates available balance before reducing points
-- a future timestamp on /clock triggers expiry logic
-- outbox receives a tier-upgrade event when the member crosses a threshold
+## API Design & Operations
 
-During implementation, the biggest issues were:
-- inconsistent phone normalization
-- database migration issues around new columns
-- incorrect tier thresholds during earlier iterations
+The REST API mirrors real café counter operations:
 
-Those were fixed by normalizing phone numbers before lookup and registration, enforcing a stable migration path for SQLite, and centralizing tier logic to a single function.
+* `POST /api/register` & `POST /api/login`: Handles staff authentication.
+* `POST /api/members`: Registers new customers with automated phone string normalization (`/\D/g`).
+* `GET /api/members`: Returns paginated, searchable member records formatted with live tier badges.
+* `POST /api/transactions/earn`: Calculates new points based on active tier rate, updates spendable balance and `lifetime_points`, and checks for tier threshold crossing.
+* `POST /api/transactions/redeem`: Validates available spendable balance before deducting points.
+* `POST /clock`: Simulates system time progression to process point ledger expirations.
+* `GET /outbox`: Exposes queued notification events for background worker processing.
 
-## Final outcome
+---
 
-The app now behaves like a realistic café rewards counter, and the logic is consistent with the business story and the assignment twists. The result is a product that is practical for staff use and sound enough to be evaluated for real-world problem-solving.
+## Debugging Sessions, Issue Diagnosis & Resolutions
+
+During development and testing sessions, key edge cases and boundary anomalies were identified and resolved:
+
+### 1. Zero-Point Boundary Bug (Gold Tier Misassignment)
+* **Symptom:** A newly created member with `0 points` displayed a **Gold Tier** badge (`2x pts/₹100`).
+* **Root Cause:** Loose comparison operators and uncoerced string properties caused `lifetime_points` evaluations to evaluate incorrectly or fall through threshold conditions.
+* **Fix:** Introduced explicit numeric coercion `Number(...)` and enforced structured step-down conditions (`>= 5000` $\rightarrow$ `>= 500` $\rightarrow$ `>= 200` $\rightarrow$ fallback to `Bronze`).
+
+### 2. Database Persistence & Stale Cache Discrepancies
+* **Symptom:** After updating tier evaluation code in `server.js`, existing test members in the browser UI still displayed stale tier badges.
+* **Root Cause:** SQLite persists state directly to `database.db`. Updating application logic does not retroactively rewrite existing SQLite table rows containing historical `lifetime_points` data written during previous test runs.
+* **Fix:** Established a standard database flushing protocol (`rm -f database.db loyalty.db`) prior to running boundary verification test suites.
+
+### 3. Mid-Tier Boundary Validation (200 Point Threshold)
+* **Symptom:** A member with exactly `200 points` rendered as **Gold** instead of **Silver**.
+* **Root Cause:** Database rows seeded during testing contained higher historical values than displayed spendable balances.
+* **Fix:** Verified that `200 lifetime_points` strictly maps to **Silver** (`1.5x pts/₹100`) and validated seeded database rows using SQL CLI scripts.
+
+### 4. Phone Number Normalization
+* **Symptom:** Lookups failed when staff entered formatted phone inputs (e.g., `(987) 654-3210` vs `9876543210`).
+* **Fix:** Implemented global input sanitization using `.replace(/\D/g, '')` across registration, search, and lookup handlers.
+
+---
+
+## Final System State & Verification Summary
+
+All core requirements and twist criteria are fully operational and verified:
+
+- [x] **Relational State Persistence:** SQLite integration verified via disk persistence.
+- [x] **Tier Calculation Accuracy:** Boundary cases verified across Bronze (0 pts), Silver (200 pts), Gold (500 pts), and Platinum (5000 pts).
+- [x] **Data Integrity:** Strict numeric coercion prevents calculation anomalies.
+- [x] **Auditability:** Complete diagnostic logs and session history captured in `AI_LOGS.md`.
