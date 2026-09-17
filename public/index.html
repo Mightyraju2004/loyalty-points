@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Cafe Loyalty Management System</title>
+  <style>
+    :root { --primary: #4f46e5; --dark: #1e293b; --light: #f8fafc; }
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; margin: 0; background: var(--light); color: var(--dark); line-height: 1.6; }
+    nav { background: white; padding: 1rem 2rem; display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #e2e8f0; }
+    .logo { font-weight: bold; font-size: 1.25rem; color: var(--primary); }
+    .btn { background: var(--primary); color: white; padding: 0.5rem 1rem; border-radius: 6px; text-decoration: none; font-weight: 500; }
+    .hero { text-align: center; padding: 4rem 1rem; background: white; border-bottom: 1px solid #e2e8f0; }
+    .hero h1 { font-size: 2.5rem; margin-bottom: 1rem; }
+    .hero p { font-size: 1.2rem; color: #64748b; max-width: 600px; margin: 0 auto 2rem; }
+    .container { max-width: 1000px; margin: 0 auto; padding: 3rem 1rem; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 1.5rem; margin-top: 2rem; }
+    .card { background: white; padding: 1.5rem; border-radius: 8px; border: 1px solid #e2e8f0; }
+    .card h3 { margin-top: 0; color: var(--primary); }
+    footer { text-align: center; padding: 2rem; border-top: 1px solid #e2e8f0; font-size: 0.9rem; color: #64748b; }
+  </style>
+</head>
+<body>
+
+  <nav>
+    <div class="logo">☕ CafeRewards</div>
+    <a href="/dashboard.html" class="btn">Go to App Dashboard</a>
+  </nav>
+
+  <section class="hero">
+    <h1>Smart Loyalty Points Management</h1>
+    <p>A simple, powerful full-stack solution to reward your recurring cafe customers, track balance tiers, and boost retention effortless.</p>
+    <a href="/dashboard.html" class="btn" style="font-size: 1.1rem; padding: 0.75rem 1.5rem;">Open POS Dashboard &rarr;</a>
+  </section>
+
+  <div class="container">
+    <h2>Product Overview</h2>
+    <p>CafeRewards allows cafe managers to register members, issue points on purchases based on tier multipliers (Silver, Gold, Platinum), and seamlessly redeem rewards directly at checkout.</p>
+
+    <div class="grid">
+      <div class="card">
+        <h3>🎯 Target Audience</h3>
+        <p>Independent cafes, coffee shop chains, and local eateries looking to modernise their loyalty program without heavy enterprise software.</p>
+      </div>
+
+      <div class="card">
+        <h3>⚡ Key Features</h3>
+        <ul>
+          <li>User Auth & POS Admin Portal</li>
+          <li>Tiered Earn Rates (Silver 1x, Gold 2x, Platinum 3x)</li>
+          <li>Instant Reward Redemption</li>
+          <li>Searchable Member Directory with Pagination</li>
+        </ul>
+      </div>
+
+      <div class="card">
+        <h3>🚀 Next 3 Features to Build</h3>
+        <ol>
+          <li><strong>SMS Notifications:</strong> Real-time alerts when earning points.</li>
+          <li><strong>Birthday Multipliers:</strong> Automatic bonus points on special days.</li>
+          <li><strong>Analytics Dashboard:</strong> Revenue tracking by loyalty tier.</li>
+        </ol>
+      </div>
+    </div>
+  </div>
+
+  <footer>
+    <p>Cafe Loyalty System — Campus Drive Assessment Solution</p>
+  </footer>
+
+</body>
+</html>

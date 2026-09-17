@@ -1,0 +1,55 @@
+:root {
+  --primary: #4f46e5;
+  --primary-hover: #4338ca;
+  --bg-color: #f8fafc;
+  --card-bg: #ffffff;
+  --text-color: #1e293b;
+  --border-color: #cbd5e1;
+  --silver-bg: #e2e8f0;
+  --silver-text: #475569;
+  --gold-bg: #fef08a;
+  --gold-text: #854d0e;
+  --plat-bg: #ddd6fe;
+  --plat-text: #5b21b6;
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background-color: var(--bg-color); color: var(--text-color); line-height: 1.5; padding-bottom: 3rem; }
+
+header { background: var(--card-bg); padding: 1rem 2rem; border-bottom: 1px solid var(--border-color); display: flex; justify-content: space-between; align-items: center; }
+.logo { font-size: 1.25rem; font-weight: bold; color: var(--primary); text-decoration: none; }
+nav a { margin-left: 1rem; color: var(--text-color); text-decoration: none; font-weight: 500; }
+nav a:hover { color: var(--primary); }
+
+.container { max-width: 1000px; margin: 2rem auto; padding: 0 1rem; }
+.auth-card { max-width: 400px; margin: 4rem auto; padding: 2rem; background: var(--card-bg); border-radius: 8px; border: 1px solid var(--border-color); box-shadow: 0 4px 6px -1px rgba(0,0,0,0.1); }
+
+h1, h2, h3 { margin-bottom: 1rem; }
+.form-group { margin-bottom: 1rem; }
+label { display: block; font-size: 0.9rem; font-weight: 600; margin-bottom: 0.25rem; }
+input, select, button { width: 100%; padding: 0.65rem; border: 1px solid var(--border-color); border-radius: 6px; font-size: 1rem; }
+input:focus, select:focus { outline: 2px solid var(--primary); }
+
+button { background: var(--primary); color: white; border: none; font-weight: 600; cursor: pointer; transition: background 0.2s; margin-top: 0.5rem; }
+button:hover { background: var(--primary-hover); }
+button.secondary { background: #64748b; }
+button.secondary:hover { background: #475569; }
+button.danger { background: #dc2626; }
+button.danger:hover { background: #b91c1c; }
+
+.grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 1.5rem; margin-bottom: 2rem; }
+.card { background: var(--card-bg); padding: 1.5rem; border-radius: 8px; border: 1px solid var(--border-color); }
+
+.badge { padding: 0.2rem 0.6rem; border-radius: 4px; font-size: 0.8rem; font-weight: 700; display: inline-block; }
+.Silver { background: var(--silver-bg); color: var(--silver-text); }
+.Gold { background: var(--gold-bg); color: var(--gold-text); }
+.Platinum { background: var(--plat-bg); color: var(--plat-text); }
+
+table { width: 100%; border-collapse: collapse; margin-top: 1rem; background: var(--card-bg); border-radius: 8px; overflow: hidden; border: 1px solid var(--border-color); }
+th, td { padding: 0.75rem 1rem; text-align: left; border-bottom: 1px solid var(--border-color); }
+th { background: #f1f5f9; font-size: 0.85rem; text-transform: uppercase; letter-spacing: 0.05em; color: #64748b; }
+
+.pagination { display: flex; justify-content: space-between; align-items: center; margin-top: 1rem; }
+.alert { padding: 0.75rem; border-radius: 6px; margin-bottom: 1rem; font-size: 0.9rem; }
+.alert-error { background: #fef2f2; color: #991b1b; border: 1px solid #fecaca; }
+.alert-success { background: #f0fdf4; color: #166534; border: 1px solid #bbf7d0; }
